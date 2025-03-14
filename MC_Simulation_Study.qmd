@@ -1,0 +1,342 @@
+---
+title: "Time-varying PAGFL - Simulation Study"
+subtitle: "Replication of Haimerl et al. (2025, sec. 4)"
+author: "Paul Haimerl"
+institute: "Department of Economics and Business Economics, CoRE Center for Research in Energy: Economics and Markets, Aarhus University, Fuglesangs Allé 4, 8210 Aarhus V, Denmark"
+date: March 2025
+format: html
+---
+
+# Settings
+
+```{r}
+N_vec <- c(50, 100)
+T_vec <- c(50, 100)
+DGP_vec <- 1:3
+AR_error <- FALSE
+Discard_30perc_of_sample <- FALSE
+n_sim <- 300
+fileName <- "MC_sim" # Can be changed to any (informative) name
+```
+
+# Preliminaries
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Load functions & libraries
+source("Helper_Functions.R")
+pckgs <- c("openxlsx", "tidyverse", "PAGFLReplication", "parallel", "aricode", "readr")
+sapply(pckgs, loadPackages)
+
+# Construct a grid of settings
+simGrid <- expand.grid(
+  N = N_vec,
+  n_periods = T_vec,
+  DGP = DGP_vec,
+  AR_error = AR_error,
+  NA_data = Discard_30perc_of_sample
+)
+
+# Number of cores to be used
+n_cores <- 30 # To replicate the results in the paper, set n_cores = 30 and iseed = 123
+
+# Read in the lambda candidate values
+MC_settings <- read_delim("MC_settings.csv", delim = ";", escape_double = FALSE, trim_ws = TRUE)
+
+# Create an output folder
+path <- create_output_dir(fileName)
+outputMat <- rep(NA, 11)
+replicationList <- list()
+```
+
+# Run the simulations
+
+```{r}
+for (i in 1:nrow(simGrid)) {
+  start_time <- Sys.time()
+  cat(paste("Iteration", i, "/", nrow(simGrid), "Start:", format(start_time, "%H:%M")))
+
+  #----------------------------------------#
+  #### Settings for each specification  ####
+  #----------------------------------------#
+
+  spec <- simGrid[i, ]
+  N <- spec[["N"]]
+  n_periods <- spec[["n_periods"]]
+  DGP <- spec[["DGP"]]
+  AR_error <- spec[["AR_error"]]
+  NA_data <- spec[["NA_data"]]
+  MC_spec <- MC_settings[MC_settings$N == N & MC_settings$n_periods == n_periods & MC_settings$DGP == DGP & MC_settings$AR_error == AR_error & MC_settings$NA_data == NA_data, ]
+  lambda_set <- seq(MC_spec$lambda_low, MC_spec$lambda_high, length.out = 50)
+  if (DGP == 2) {
+    p <- 2
+    formula <- y ~ .
+  } else if (DGP == 1) {
+    p <- 1
+    formula <- y ~ .
+  } else {
+    p <- 1
+  }
+  M <- MC_spec$M
+
+  #------------------------------#
+  #### Run the MC iterations  ####
+  #------------------------------#
+
+  cl <- makeCluster(n_cores, outfile = "")
+  clusterExport(cl, ls())
+  # To replicate the results in the paper set n_cores = 30 and iseed = 123
+  clusterSetRNGStream(cl, iseed = 123)
+  clusterEvalQ(cl, library(PAGFLReplication))
+
+  MC_output <- parSapply(cl, 1:n_sim, function(j) {
+    # Draw the DGP
+    sim <- sim_tv_paper(N = N, n_periods = n_periods, DGP = DGP, AR_errors = AR_error)
+    X <- sim$X
+    y <- sim$y
+    beta_0 <- sim$beta
+    groups_0 <- sim$groups
+
+    # Prepare the simulated data
+    data <- as.data.frame(cbind(y = c(y), X))
+    data$i_index <- rep(1:N, each = n_periods)
+    data$t_index <- rep(1:n_periods, N)
+    if (NA_data) {
+      delete_index <- as.logical(rbinom(length(y), size = 1, prob = .7))
+      data <- data[delete_index, ]
+    }
+    if (DGP == 3) {
+      formula <- y ~ -1 + X
+      colnames(data)[2] <- "X"
+    }
+
+    # Estimate
+    estim <- tv_pagfl(formula = formula, data = data, index = c("i_index", "t_index"), lambda = lambda_set, verbose = FALSE, max_iter = 5e5, parallel = FALSE, M = M)
+
+    # Extract estimates
+    K_vec <- estim$K_vec
+    alpha_hat <- estim$coefficients$tv
+    beta_hat <- estim$beta$tv
+    groups_hat <- c(estim$groups$groups)
+    alpha_ind_hat <- alpha_hat[, , groups_hat]
+    if (is.matrix(alpha_ind_hat)) alpha_ind_hat <- array(alpha_ind_hat, dim = c(n_periods, p, N))
+    # Run the oracle estimator
+    beta_oracle <- grouped_tv_plm(formula = formula, data = data, groups = groups_0, index = c("i_index", "t_index"), verbose = F, parallel = F)
+    beta_oracle <- beta_oracle$coefficients$tv[, , groups_0]
+    if (is.matrix(beta_oracle)) beta_oracle <- array(beta_oracle, dim = c(n_periods, p, N))
+    intercept_indx <- which(colnames(alpha_hat) == "(Intercept)")
+    if (length(intercept_indx) != 0) {
+      beta_0[, intercept_indx, ] <- matrix(
+        demean_vec(c(beta_0[, intercept_indx, ]), N = N, i_index = rep(1:N, each = n_periods)),
+        nrow = n_periods
+      )
+    }
+
+    # Evaluate
+    suppressWarnings({
+      paramMetrics_list <- getParamMetrics(
+        alpha_hat = alpha_ind_hat, beta_hat = beta_hat, beta_oracle = beta_oracle, beta_0 = beta_0, groups_0 = groups_0
+      )
+      groupMetrics <- getGroupMetrics(groups_hat = groups_hat, groups_0 = groups_0)
+    })
+
+    # Store and output
+    coef_list <- list(pse = beta_hat, post = alpha_ind_hat, oracle = beta_oracle)
+    replicList <- list(sim = sim, estim_args = estim$args, estim_IC = estim$IC, estim_convergence = estim$convergence, estim_groups = estim$groups, coefs = coef_list, K_vec = K_vec)
+    return(list(
+      params = paramMetrics_list, grouping = c(groupMetrics, K_hat = estim$groups$n_groups, lambda = estim$IC$lambda), alpha_hat = alpha_hat, groups_hat = estim$groups$groups, replic = replicList
+    ))
+  })
+
+  stopCluster(cl)
+
+  #------------------------------#
+  #### Rewrite the output     ####
+  #------------------------------#
+
+  # Bring the parameter metrics in order ...
+  # RMSE
+  parameterMetrics_list <- MC_output["params", ]
+  RMSE_list <- lapply(parameterMetrics_list, function(x) x[["RMSE"]])
+  RMSE_array <- array(unlist(RMSE_list), dim = c(3, ncol(RMSE_list[[1]]), n_sim))
+  # Take average over MC runs
+  RMSE_mat <- apply(RMSE_array, c(1, 2), mean, na.rm = TRUE)
+  if (ncol(RMSE_mat) == 1) {
+    RMSE_mat <- cbind(RMSE_mat, rep(NA, 3))
+  }
+  RMSE_vec <- c(RMSE_mat)
+  names(RMSE_vec) <- paste(rep(c("post", "pse", "oracle"), ncol(RMSE_mat)),
+    rep(1:ncol(RMSE_mat), each = 3),
+    sep = "_"
+  )
+
+  # Bring the grouping metrics in order
+  groupMetrics_mat <- t(matrix(unlist(MC_output["grouping", ]), nc = n_sim))
+  colnames(groupMetrics_mat) <- c("ARI", "Perc_correct", "Perc_K_correct", "K_hat", "lambda")
+  groupMetrics_vec <- colMeans(groupMetrics_mat, na.rm = TRUE)
+
+  #------------------------------#
+  #### Prepare the output     ####
+  #------------------------------#
+
+  outputVec <- c(groupMetrics_vec, RMSE_vec)
+  outputMat <- rbind(outputMat, outputVec)
+  replicationList_temp <- MC_output["replic", ]
+  estim_args <- replicationList_temp[[1]]$estim_args
+  replicationList_temp <- lapply(replicationList_temp, function(x) {
+    x$estim_args <- NULL
+    return(x)
+  })
+  replicationList[[i]] <- list(spec = spec, result = replicationList_temp, estim_args = estim_args)
+  rm(replicationList_temp, MC_output)
+  end_time <- Sys.time()
+  cat(" - Elapsed:", as.numeric(round(difftime(end_time, start_time, units = "mins"), 1)), "mins", "\n")
+}
+```
+
+# Store the results
+
+```{r}
+saveRDS(replicationList, file = paste0(path, "replic_", fileName, ".rds"))
+outputMat <- outputMat[-1, ]
+if (!is.matrix(outputMat)) outputMat <- t(outputMat)
+ResultsTib <- cbind(n_sim = n_sim, simGrid, round(outputMat, 3)) %>%
+  as_tibble() %>%
+  arrange(N, n_periods)
+saveRDS(ResultsTib, file = paste0(path, fileName, ".rds"))
+write.xlsx(ResultsTib, file = paste0(path, fileName, ".xlsx"))
+```
+
+# Replicate figures 2 and 3
+
+```{r}
+textSize <- 5
+figure_path <- create_output_dir("Simulation_figures", MC = FALSE)
+```
+
+
+### Figure 2
+
+```{r}
+# Create the coefficient functions
+DGP1 <- sim_tv_paper(DGP = 1, N = 50, n_periods = 500)$alpha
+DGP2 <- sim_tv_paper(DGP = 2, N = 50, n_periods = 500)$alpha
+DGP3 <- sim_tv_paper(DGP = 3, N = 50, n_periods = 500)$alpha
+
+# Summarize the coefficient functions in a table
+DGP1_tib <- tibble(k = rep(1:3, each = 500), "0" = c(DGP1)) %>%
+  group_by(k) %>%
+  mutate(index = 1:n() / n()) %>%
+  ungroup() %>%
+  pivot_longer(-c(index, k), names_to = "coef", values_to = "value")
+alpha_2 <- rbind(DGP2[, , 1], DGP2[, , 2], DGP2[, , 3])
+colnames(alpha_2) <- paste0(1:2)
+DGP2_tib <- as_tibble(cbind(tibble(k = rep(1:3, each = 500)), alpha_2)) %>%
+  group_by(k) %>%
+  mutate(index = 1:n() / n()) %>%
+  ungroup() %>%
+  pivot_longer(-c(index, k), names_to = "coef", values_to = "value")
+DGP3_tib <- tibble(k = rep(1:3, each = 500), "3" = c(DGP3)) %>%
+  group_by(k) %>%
+  mutate(index = 1:n() / n()) %>%
+  ungroup() %>%
+  pivot_longer(-c(index, k), names_to = "coef", values_to = "value")
+plot_tib <- rbind(DGP1_tib, DGP2_tib, DGP3_tib) %>%
+  mutate(k = factor(k)) %>%
+  mutate(coef = factor(coef)) %>%
+  arrange(k, coef, index)
+
+# Create the figure
+sim_alpha_fig <- plot_tib %>%
+  ggplot(aes(x = index, y = value)) +
+  geom_line(aes(color = k, linetype = k, linewidth = k)) +
+  facet_wrap(~coef, scales = "free", labeller = label_bquote(alpha[.(paste0("k,", as.character(coef)))]^0 * italic((v)))) +
+  theme_bw() +
+  scale_x_continuous(name = expression(italic(v))) +
+  scale_y_continuous(name = "") +
+  scale_color_manual(values = c("black", "#00a3dc", "#e94d07")) +
+  scale_linetype_manual(values = c(1, 2, 3)) +
+  scale_linewidth_manual(values = c(.2, .2, .4)) +
+  theme(
+    plot.title = element_text(face = "bold", size = textSize, hjust = .5),
+    panel.grid.major = element_line(linewidth = .2),
+    panel.background = element_rect(colour = NA, fill = NA),
+    plot.background = element_rect(colour = NA, fill = NA),
+    panel.border = element_blank(),
+    axis.line = element_line(colour = "black", linewidth = .2),
+    axis.text = element_text(size = textSize, colour = "black"),
+    axis.title = element_text(size = textSize, colour = "black"),
+    axis.ticks = element_line(linewidth = .2, colour = "black"),
+    axis.ticks.length = unit(.07, "cm"),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    legend.margin = margin(t = -10),
+    legend.text = element_text(size = textSize),
+    legend.title = element_text(size = textSize),
+    legend.background = element_rect(colour = NA, fill = NA),
+    strip.text = element_text(size = textSize),
+    strip.background = element_rect(colour = NA, fill = NA),
+    plot.margin = margin(t = 5.5, l = 5.5, r = 5.5, b = -4)
+  )
+sim_alpha_fig
+ggsave(sim_alpha_fig, file = paste0(figure_path, "sim_alpha_fig.pdf"), width = 4.5, height = 2.5)
+```
+
+### Figure 3
+
+```{r}
+# Read in the replication lists from the simulation studies (set this to the specific path the files are stored in)
+# DGP1_replication_list <- readRDS("Simulation_output/DGP_1/replic_DPG_1.rds")
+# DGP2_replication_list <- readRDS("Simulation_output/DGP_2/replic_DPG_2.rds")
+# DGP3_replication_list <- readRDS("Simulation_output/DGP_3/replic_DPG_3.rds")
+
+# Construct a table summarizing all the results
+DGP1_plot_tib <- MC_fig(DGP = 1, replic = DGP1_replication_list)
+DGP2_plot_tib <- MC_fig(DGP = 2, replic = DGP2_replication_list)
+DGP3_plot_tib <- MC_fig(DGP = 3, replic = DGP3_replication_list)
+MC_plot_tib <- rbind(DGP1_plot_tib, DGP2_plot_tib, DGP3_plot_tib) %>%
+  mutate(
+    mc_run = fct_shuffle(as.character(mc_run)),
+    id = fct_shuffle(as.character(id))
+  )
+
+# Create the figure
+MC_result_plot <- MC_plot_tib %>%
+  filter(group_0 == group_hat) %>%
+  select(-c(id, group_hat)) %>%
+  distinct() %>%
+  rename(id = mc_run) %>%
+  ggplot(aes(x = index, y = Estimate)) +
+  geom_line(aes(color = id, linetype = id), size = .05, alpha = .4) +
+  facet_grid(Coefficient ~ group_0, labeller = label_bquote(
+    rows = alpha[.(paste0("k,", substr(Coefficient, 7, 7)))] * italic((v)),
+    cols = G[.(paste0(group_0))]^0
+  ), scales = "free") +
+  geom_line(aes(y = True), color = "black", size = .2, linetype = 2) +
+  theme_bw() +
+  scale_linetype_manual(values = sample(1:6, 300, replace = T)) +
+  scale_x_continuous(name = expression(italic(v))) +
+  scale_y_continuous(name = "") +
+  theme(
+    plot.title = element_text(face = "bold", size = textSize, hjust = .5),
+    panel.grid.major = element_line(linewidth = .2),
+    panel.background = element_rect(colour = NA, fill = NA),
+    plot.background = element_rect(colour = NA, fill = NA),
+    panel.border = element_blank(),
+    axis.line = element_line(colour = "black", linewidth = .2),
+    axis.text = element_text(size = textSize, colour = "black"),
+    axis.title = element_text(size = textSize, colour = "black"),
+    axis.ticks = element_line(linewidth = .2, colour = "black"),
+    axis.ticks.length = unit(.07, "cm"),
+    panel.grid.minor = element_blank(),
+    legend.position = "none",
+    legend.margin = margin(t = -10),
+    legend.text = element_text(size = textSize),
+    legend.title = element_text(size = textSize),
+    legend.background = element_rect(colour = NA, fill = NA),
+    strip.text = element_text(size = textSize),
+    strip.background = element_rect(colour = NA, fill = NA),
+    plot.margin = margin(t = 5.5, l = 5.5, r = 5.5, b = 0)
+  )
+MC_result_plot
+ggsave(MC_result_plot, file = paste0(figure_path, "sim_result_fig.pdf"), width = 4.5, height = 2.5)
+```

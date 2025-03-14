@@ -1,0 +1,274 @@
+---
+title: "Time-varying PAGFL - Empirical Illustration"
+subtitle: "Replication of Haimerl et al. (2025, sec. 5)"
+author: "Paul Haimerl"
+institute: "Department of Economics and Business Economics, CoRE Center for Research in Energy: Economics and Markets, Aarhus University, Fuglesangs Allé 4, 8210 Aarhus V, Denmark"
+date: March 2025
+format: html
+---
+
+# Preliminaries
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Load functions & libraries
+source("Helper_Functions.R")
+pckgs <- c("tidyverse", "PAGFLReplication", "readxl", "parallel", "openxlsx")
+sapply(pckgs, loadPackages)
+# Construct the data set
+df <- prep_data_inst()
+# Restrict the dataset
+df_fin <- filter(df, !(country_code %in% c("ARE", "AZE", "IRQ", "KWT", "LUX", "QAT", "TKM")))
+```
+
+# Estimate
+
+```{r}
+estim <- tv_pagfl(intens ~ 1, data = df_fin, index = c("country_code", "year"), lambda = 0.72, max_iter = 5e+05, parallel = F, M = 4, d = 2)
+saveRDS(estim, file = "estim_CO2_intensity.rds")
+```
+
+# Summary statistics of the dataset
+
+```{r}
+obs_tib <- df_fin %>%
+  select(c(year, country)) %>%
+  group_by(country) %>%
+  mutate(obs = n()) %>%
+  ungroup() %>%
+  select(-year) %>%
+  distinct()
+
+summary_stats <- df_fin %>%
+  select(c(co2, gdp, intens)) %>%
+  as.matrix() %>%
+  apply(., 2, function(x) c(Mean = mean(x), "Std." = sd(x), quantile(x))) %>%
+  round(3) %>%
+  t() %>%
+  as.data.frame()
+summary_stats <- rbind(summary_stats, round(c(mean = mean(obs_tib[["obs"]]), sd = sd(obs_tib[["obs"]]), quantile(obs_tib[["obs"]])), 3))
+summary_stats$coef <- rownames(summary_stats)
+rownames(summary_stats) <- NULL
+summary_stats$coef[nrow(summary_stats)] <- "obs_horizon"
+colnames(summary_stats)[-(1:2)] <- c("Min", "Q1", "Median", "Q3", "Max", "Coef")
+write.xlsx(summary_stats, file = "CO2_intensity_numeric_stats.xlsx")
+
+```
+
+# Replicate figures 4-6
+
+```{r}
+textSize <- 5
+path <- create_output_dir("Emp_figures", MC = FALSE)
+```
+
+### Figure 4
+
+```{r}
+# Read in the estimate
+# estim <- readRDS("estim_CO2_intensity.rds")
+
+# Summarize the estimates in a table for the left panel of the figure
+coef_tib <- tibble(
+  "1" = estim$coefficients$tv[, , 1],
+  "2" = estim$coefficients$tv[, , 2],
+  "3" = estim$coefficients$tv[, , 3],
+  "4" = estim$coefficients$tv[, , 4],
+  "5" = estim$coefficients$tv[, , 5],
+  "year" = as.numeric(names(estim$coefficients$tv[, , 1]))
+) %>%
+  pivot_longer(cols = -year, values_to = "trend", names_to = "Group") %>%
+  arrange(Group)
+
+# Create the left panel of the figure
+coef_fig <- coef_tib %>%
+  ggplot() +
+  geom_line(aes(x = year, y = trend, color = Group, linetype = Group, linewidth = Group)) +
+  scale_color_manual(values = c("#38618c", "#00a3dc", "#e94d07", "#f39520", "#37a937")) +
+  scale_linetype_manual(values = c(1, 2, 3, 4, 6)) +
+  scale_linewidth_manual(values = c(.2, .2, .4, .2, .2)) +
+  theme_bw() +
+  scale_x_continuous(name = "") +
+  scale_y_continuous(name = expression(paste("Demeaned ", "CO"[2], " intensity of GDP")), n.breaks = 6) +
+  theme(
+    panel.grid.major = element_line(linewidth = .2),
+    panel.background = element_rect(colour = NA, fill = NA),
+    plot.background = element_rect(colour = NA, fill = NA),
+    panel.border = element_blank(),
+    axis.line = element_line(colour = "black", linewidth = .2),
+    axis.text = element_text(size = textSize, colour = "black"),
+    axis.title = element_text(size = textSize, colour = "black"),
+    axis.ticks = element_line(linewidth = .2, colour = "black"),
+    axis.ticks.length = unit(.07, "cm"),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    legend.margin = margin(t = -10),
+    legend.text = element_text(size = textSize),
+    legend.title = element_text(size = textSize),
+    legend.background = element_rect(colour = NA, fill = NA)
+  )
+
+# Construct a data table for the right panel of the figure
+group_tib <- tibble(country = names(estim$groups$groups), Group = estim$groups$groups)
+name_map <- df %>%
+  select(c(country_code, country)) %>%
+  distinct()
+group_tib <- rename(group_tib, country_code = country)
+group_tib <- merge(group_tib, name_map, by = "country_code") %>%
+  select(-country_code) %>%
+  arrange(Group, country)
+result_tib <- merge(df_fin, group_tib, by = "country") %>%
+  mutate(Group = as.character(Group)) %>%
+  merge(., coef_tib, by = c("Group", "year")) %>%
+  as_tibble() %>%
+  group_by(country) %>%
+  mutate(intens_deman = intens - mean(intens)) %>%
+  ungroup() %>%
+  mutate(country = fct_shuffle(country))
+
+# Create the right panel of the figure
+intens_fig <- result_tib %>%
+  mutate(Group = paste0("Group ", Group)) %>%
+  ggplot() +
+  geom_line(aes(x = year, y = intens_deman, color = country), linewidth = .1, linetype = 1) +
+  geom_line(aes(x = year, y = trend), color = "black", linewidth = .4, linetype = 1) +
+  facet_grid(rows = vars(Group), scales = "free") +
+  theme_bw() +
+  scale_x_continuous(name = "") +
+  scale_y_continuous(name = "", n.breaks = 4) +
+  theme(
+    panel.grid.major = element_line(linewidth = .2),
+    panel.background = element_rect(colour = NA, fill = NA),
+    plot.background = element_rect(colour = NA, fill = NA),
+    panel.border = element_blank(),
+    axis.line = element_line(colour = "black", linewidth = .2),
+    axis.text = element_text(size = textSize, colour = "black"),
+    axis.title = element_text(size = textSize, colour = "black"),
+    axis.ticks = element_line(linewidth = .2, colour = "black"),
+    axis.ticks.length = unit(.07, "cm"),
+    panel.grid.minor = element_blank(),
+    legend.position = "none",
+    legend.margin = margin(t = -10),
+    legend.text = element_text(size = textSize),
+    legend.title = element_text(size = textSize),
+    legend.background = element_rect(colour = NA, fill = NA),
+    strip.text = element_text(size = textSize),
+    strip.background = element_rect(colour = NA, fill = NA),
+    plot.margin = margin(0, 0, 5.5, 0, "points")
+  )
+common_legend <- get_legend(coef_fig)
+coef_intensity_trend <- gridExtra::grid.arrange(gridExtra::arrangeGrob(coef_fig + theme(legend.position = "none"), intens_fig, nrow = 1, widths = c(1, 1)), common_legend, nrow = 2, heights = c(.99, .01))
+coef_intensity_trend
+ggsave(coef_intensity_trend, file = paste0(path, "coef_intensity_trend.pdf"), width = 4.5, height = 2)
+```
+
+### Figure 5
+
+```{r}
+sapply(c("rnaturalearthdata", "rnaturalearth"), loadPackages)
+
+world <- ne_countries(scale = "medium", returnclass = "sf")
+group_tib_plot <- group_tib %>%
+  mutate(country = ifelse(country == "USA", "United States of America", country)) %>%
+  mutate(country = ifelse(country == "Dominican Republic", "Dominican Rep.", country)) %>%
+  mutate(country = ifelse(country == "Türkiye", "Turkey", country)) %>%
+  mutate(country = ifelse(country == "Viet Nam", "Vietnam", country))
+
+map_data <- world %>%
+  left_join(group_tib_plot, by = c("name" = "country")) %>%
+  filter(name != "Antarctica")
+countries <- unique(group_tib_plot$country)
+color_map <- c("1" = "#38618c", "2" = "#00a3dc", "3" = "#e94d07", "4" = "#f39520", "5" = "#37a937")
+world_map <- map_data %>%
+  ggplot() +
+  geom_sf(aes(fill = factor(Group)), color = "white", size = 0.1) + # Fill by group and outline countries
+  scale_fill_manual(values = color_map, breaks = names(color_map), na.value = "gray") + # Customize colors
+  theme_bw() +
+  labs(fill = "Group") +
+  theme(
+    panel.background = element_rect(colour = NA, fill = NA),
+    plot.background = element_rect(colour = NA, fill = NA),
+    panel.border = element_blank(),
+    axis.line = element_blank(),
+    axis.text = element_blank(),
+    axis.title = element_text(size = textSize, colour = "black"),
+    axis.ticks = element_blank(),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    legend.margin = margin(t = -10),
+    legend.text = element_text(size = textSize),
+    legend.title = element_text(size = textSize),
+    legend.key.size = unit(.3, "cm"),
+    legend.background = element_rect(colour = NA, fill = NA),
+    plot.margin = margin(t = 5.5, l = 5.5, r = 5.5, b = -33)
+  )
+world_map
+ggsave(world_map, file = paste0(path, "map_groups.pdf"), width = 4.5, height = 2.5)
+```
+
+### Figure 6
+
+```{r}
+countries <- c("ARE", "AZE", "IRQ", "KWT", "LUX", "QAT", "TKM")
+temp_1 <- df %>%
+  filter(country_code %in% countries) %>%
+  select(c(country_code, year, intens)) %>%
+  group_by(country_code) %>%
+  mutate(intens = intens - mean(intens)) %>%
+  ungroup() %>%
+  pivot_wider(names_from = country_code, values_from = intens)
+
+temp_2 <- tibble(
+  "trend_1" = estim$coefficients$tv[, , 1],
+  "trend_2" = estim$coefficients$tv[, , 2],
+  "trend_3" = estim$coefficients$tv[, , 3],
+  "trend_4" = estim$coefficients$tv[, , 4],
+  "trend_5" = estim$coefficients$tv[, , 5],
+  "year" = as.numeric(names(estim$coefficients$tv[, , 1]))
+)
+
+plot <- merge(temp_1, temp_2, by = "year")
+
+outlier_plot <- plot %>%
+  pivot_longer(cols = -year, values_to = "intens", names_to = "country_code") %>%
+  mutate(Country = ifelse(country_code %in% countries, country_code, NA)) %>%
+  ggplot(aes(x = year, y = intens)) +
+  geom_line(aes(color = Country, group = country_code, linetype = Country, linewidth = Country)) +
+  scale_color_manual(
+    values = c("ARE" = "#800026", "AZE" = "#00a3dc", "IRQ" = "#E76BF3", "KWT" = "#e94d07", "LUX" = "#37a937", "QAT" = "#38618c", "TKM" = "#f39520"), na.value = "black",
+    breaks = countries
+  ) +
+  theme_bw() +
+  scale_linetype_manual(values = c("ARE" = 2, "AZE" = 3, "IRQ" = 4, "KWT" = 5, "LUX" = 6, "QAT" = 2, "TKM" = 3), na.value = 1, breaks = countries) +
+  scale_linewidth_manual(values = c("ARE" = .2, "AZE" = .4, "IRQ" = .2, "KWT" = .2, "LUX" = .2, "QAT" = .2, "TKM" = .4), na.value = .2, breaks = countries) +
+  scale_x_continuous(name = "", n.breaks = 6) +
+  scale_y_continuous(name = expression(paste("Demeaned ", "CO"[2], " intensity of GDP")), n.breaks = 6, limits = c(-8.3, 30)) +
+  theme(
+    panel.grid.major = element_line(linewidth = .2),
+    panel.background = element_rect(colour = NA, fill = NA),
+    plot.background = element_rect(colour = NA, fill = NA),
+    panel.border = element_blank(),
+    axis.line = element_line(colour = "black", linewidth = .2),
+    axis.text = element_text(size = textSize, colour = "black"),
+    axis.title = element_text(size = textSize, colour = "black"),
+    axis.ticks = element_line(linewidth = .2, colour = "black"),
+    axis.ticks.length = unit(.07, "cm"),
+    panel.grid.minor = element_blank(),
+    legend.position = "bottom",
+    legend.margin = margin(t = -10),
+    legend.text = element_text(size = textSize),
+    legend.title = element_blank(),
+    legend.background = element_rect(colour = NA, fill = NA),
+    plot.margin = margin(t = 5.5, l = 5.5, r = 5.5, b = -4),
+    legend.box = "horizontal"
+  ) +
+  guides(color = guide_legend(nrow = 1))
+outlier_plot
+ggsave(outlier_plot, file = paste0(path, "outlier_countries.pdf"), width = 4.5, height = 2.5)
+```
+
+# Table of group adherence
+
+```{r}
+write.xlsx(arrange(group_tib, Group), file = "CO2_intensity_group_estim.xlsx")
+```
+

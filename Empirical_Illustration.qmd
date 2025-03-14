@@ -65,7 +65,7 @@ path <- create_output_dir("Emp_figures", MC = FALSE)
 
 ```{r}
 # Read in the estimate
-# estim <- readRDS("estim_CO2_intensity.rds")
+estim <- readRDS("estim_CO2_intensity.rds")
 
 # Summarize the estimates in a table for the left panel of the figure
 coef_tib <- tibble(
@@ -185,6 +185,7 @@ world_map <- map_data %>%
   theme_bw() +
   labs(fill = "Group") +
   theme(
+    panel.grid.major = element_blank(),
     panel.background = element_rect(colour = NA, fill = NA),
     plot.background = element_rect(colour = NA, fill = NA),
     panel.border = element_blank(),

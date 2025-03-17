@@ -15,7 +15,7 @@ Please feel free to reach out in case of any questions or bugs.
 7. **PAGFLReplication_0.0.1.tar.gz**: R-package based on v1.1.3 of [PAGFL](https://github.com/Paul-Haimerl/PAGFL). `tv_pagfl()` of `PAGFLReplication` also returns the *PSE* coefficient estimates in addition to the post-Lasso, which are required for the simulation study. Furthermore, it includes the function `sim_tv_paper()` to conveniently replicate the simulated DGPs employed in Section 5.
 
 > [!NOTE]
-> The package `PAGFLReplication` and its dependencies (`RcppParallel`, `RcppThread`, `RcppArmadillo`, `ggplot2`) must be installed. `PAGFLReplication` is not on CRAn and must be installed from the provided tarball.
+> The package `PAGFLReplication` and its dependencies (`RcppParallel`, `RcppThread`, `RcppArmadillo`, `ggplot2`) must be installed if the scripts are not executed in the Docker container. `PAGFLReplication` is not on CRAN and must be installed from the provided tarball.
 
 ## Docker
 

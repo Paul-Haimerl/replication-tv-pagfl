@@ -392,8 +392,9 @@ simulated DGPs employed in Section 5.</li>
 <blockquote>
 <p>[!NOTE] The package <code>PAGFLReplication</code> and its
 dependencies (<code>RcppParallel</code>, <code>RcppThread</code>,
-<code>RcppArmadillo</code>, <code>ggplot2</code>) must be installed.
-<code>PAGFLReplication</code> is not on CRAn and must be installed from
+<code>RcppArmadillo</code>, <code>ggplot2</code>) must be installed if
+the scripts are not executed in the Docker container.
+<code>PAGFLReplication</code> is not on CRAN and must be installed from
 the provided tarball.</p>
 </blockquote>
 </div>
@@ -404,10 +405,6 @@ out-of-the-box, includes all required packages, data, and scripts for
 easy replicability. The image runs R version 4.4.1 and retrieves the
 (legacy) package versions, which were used to produce the numerical
 results in the paper.</p>
-<p>When building the image and running a container, the container is
-exposed to port 8787 (<a href="http://localhost:8787">localhost:8787</a>, RStudio Server
-default). When deploying to an environment where ports are managed
-explicitly, simply delete the 8787 reference in the Dockerfile.</p>
 </div>
 <div id="pagfl" class="section level2">
 <h2>PAGFL</h2>

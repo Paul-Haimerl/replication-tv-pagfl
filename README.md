@@ -19,7 +19,7 @@ Please feel free to reach out in case of any questions or bugs.
 
 ## Docker
 
-We also provide a Dockerfile which constructs an image that, out-of-the-box, includes all required packages, data, and scripts for easy replicability. The image runs R version 4.4.1, which was used to produce the numerical results in the paper.
+We also provide a Dockerfile which constructs an image that, out-of-the-box, includes all required packages, data, and scripts for easy replicability. The image runs R version 4.4.1 and retrieves the (legacy) package versions, which were used to produce the numerical results in the paper.
 
 ## PAGFL
 

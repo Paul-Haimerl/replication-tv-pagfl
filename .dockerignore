@@ -1,0 +1,7 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+.gitignore
+Dockerfile
+PAGFLReplication_0.0.1.tar.gz

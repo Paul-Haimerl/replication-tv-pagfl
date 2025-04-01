@@ -1,6 +1,6 @@
 # Estimation of Latent Group Structures in Time-Varying Panel Data Models
 
-This repository contains code to replicate the simulation study and empirical illustration in **Haimerl, P., Smeekes, S., & Wilms, I. (2025). Estimation of latent group structures in time-varying panel data models.**
+This repository contains code to replicate the simulation study and empirical illustration in **Haimerl, P., Smeekes, S., & Wilms, I. (2025). Estimation of latent group structures in time-varying panel data models.** DOI: [doi.org/10.48550/arXiv.2503.23165](https://doi.org/10.48550/arXiv.2503.23165).
 
 Please feel free to reach out in case of any questions or bugs.
 
